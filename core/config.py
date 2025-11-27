@@ -1,0 +1,5 @@
+DEFAULT_CURRENT_VAT = 20.0
+DEFAULT_FUTURE_VAT = 22.0
+DEFAULT_YEARS_PROJECTION = 5
+MAX_DISPLAY_ROWS = 1000  # Максимум строк для отображения
+MAX_PROJECTION_YEARS = 10  # Максимум лет прогноза
