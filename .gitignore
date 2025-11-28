@@ -3,3 +3,8 @@ build/
 .venv/
 main.spec
 data/input
+main.dist/
+main.build/
+main.onefile-build/
+main.exe
+VAT Calc.exe
