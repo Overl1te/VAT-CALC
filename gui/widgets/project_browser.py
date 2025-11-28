@@ -2,6 +2,9 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from datetime import datetime
 from gui.widgets.project_editor import ProjectEditor
+from gui.widgets.settings_dialog import SettingsDialog
+from gui.widgets.settings_dialog import set_icon
+
 
 class ProjectBrowser(tk.Frame):
     def __init__(self, parent, project_manager):
@@ -10,10 +13,11 @@ class ProjectBrowser(tk.Frame):
         self.project_manager = project_manager
         self.project_dict = {}
         
-        # Панель управления
+        # Панель управления - все кнопки в одном фрейме
         control_frame = tk.Frame(self)
         control_frame.pack(fill='x', pady=(0, 10))
         
+        # Кнопки слева
         ttk.Button(control_frame, text="Создать проект", 
                   command=self.create_project).pack(side='left', padx=5)
         ttk.Button(control_frame, text="Обновить", 
@@ -22,6 +26,11 @@ class ProjectBrowser(tk.Frame):
                   command=self.open_selected).pack(side='left', padx=5)
         ttk.Button(control_frame, text="Удалить", 
                   command=self.delete_selected).pack(side='left', padx=5)
+        
+        # Кнопка настроек справа
+        settings_btn = ttk.Button(control_frame, text='⚙ Настройки', 
+                                 command=lambda: SettingsDialog(self.parent))
+        settings_btn.pack(side='right', padx=5)
         
         # Таблица проектов
         self.tree = ttk.Treeview(self, columns=('name', 'contracts', 'created', 'modified'), 
@@ -43,6 +52,8 @@ class ProjectBrowser(tk.Frame):
         self.tree.bind('<Double-1>', lambda e: self.open_selected())
         
         self.refresh_projects()
+
+        set_icon(self)
     
     def refresh_projects(self):
         """Обновить список проектов"""
