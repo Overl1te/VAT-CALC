@@ -8,3 +8,4 @@ main.build/
 main.onefile-build/
 main.exe
 VAT Calc.exe
+*.pyc
