@@ -1,359 +1,214 @@
 # gui/widgets/project_editor.py
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, simpledialog
-from pathlib import Path
+from tkinter import ttk, filedialog, messagebox
 from datetime import datetime
-import shutil
+from core.contracts import Contract
+from utils.excel_processor import read_input_excel
+from core.project_manager import VATProject
 from gui.widgets.settings_dialog import set_icon
-from gui.widgets.contract_editor import ContractEditor  # <-- УБЕДИСЬ, ЧТО ЭТОТ ФАЙЛ СУЩЕСТВУЕТ!
-from core.contracts import Contract, VATChange, ContractTask
-
 
 class ProjectEditor(tk.Toplevel):
     def __init__(self, parent, project_manager, project=None):
         super().__init__(parent)
         self.project_manager = project_manager
-        self.project = project
-        self.is_new = project is None
-        self.unsaved_changes = False
-
-        if self.is_new:
-            self.title("Создать новый проект *")
-            self.project = project_manager.create_project_in_memory("Новый проект")
-        else:
-            self.title(f"Редактирование: {project.name}")
-
-        self.geometry("1000x720")
-        self.resizable(True, True)
-
+        self.project = project or project_manager.create_project_in_memory("Новый проект")
+        self.title(f"Проект: {self.project.name}" + (" (новый)" if project is None else ""))
+        self.geometry("1200x700")
         self.create_widgets()
-        self.load_project_data()
+        self.refresh_contracts()
+
         set_icon(self)
 
-        if not self.is_new:
-            self.setup_change_tracking()
-
-    def setup_change_tracking(self):
-        self.name_var.trace('w', self.mark_unsaved)
-        self.current_vat_var.trace('w', self.mark_unsaved)
-        self.future_vat_var.trace('w', self.mark_unsaved)
-
-    def mark_unsaved(self, *args):
-        if not self.is_new:
-            self.unsaved_changes = True
-            self.update_title()
-
-    def update_title(self):
-        title = f"Редактирование: {self.project.name}"
-        if self.unsaved_changes:
-            self.title(f"{title} *")
-        else:
-            self.title(title)
-
-    def clear_unsaved_flag(self):
-        self.unsaved_changes = False
-        self.update_title()
-
     def create_widgets(self):
-        notebook = ttk.Notebook(self)
-        notebook.pack(fill='both', expand=True, padx=10, pady=10)
+        toolbar = ttk.Frame(self)
+        toolbar.pack(fill='x', padx=10, pady=5)
 
-        settings_frame = ttk.Frame(notebook)
-        contracts_frame = ttk.Frame(notebook)
-        results_frame = ttk.Frame(notebook)
-
-        notebook.add(settings_frame, text="Настройки")
-        notebook.add(contracts_frame, text="Контракты")
-        notebook.add(results_frame, text="Результаты")
-
-        self.setup_settings_tab(settings_frame)
-        self.setup_contracts_tab(contracts_frame)
-        self.setup_results_tab(results_frame)
-
-        btn_frame = ttk.Frame(self)
-        btn_frame.pack(fill='x', padx=10, pady=5)
-
-        self.save_btn = ttk.Button(btn_frame, text="Сохранить проект", command=self.save_project)
-        self.save_btn.pack(side='left', padx=5)
-
-        ttk.Button(btn_frame, text="Рассчитать", command=self.calculate_results).pack(side='left', padx=5)
-        ttk.Button(btn_frame, text="Закрыть", command=self.on_close).pack(side='right', padx=5)
-
-        if self.is_new:
-            self.save_btn.configure(style='Highlight.TButton')
-
-    def setup_settings_tab(self, parent):
-        ttk.Label(parent, text="Название проекта:").grid(row=0, column=0, sticky='w', padx=10, pady=8)
+        ttk.Label(toolbar, text="Название проекта:", font=('', 10, 'bold')).pack(side='left')
         self.name_var = tk.StringVar(value=self.project.name)
-        ttk.Entry(parent, textvariable=self.name_var, width=40).grid(row=0, column=1, sticky='w', padx=10)
+        ttk.Entry(toolbar, textvariable=self.name_var, width=50).pack(side='left', padx=5)
+        self.name_var.trace('w', lambda *_: setattr(self.project, 'name', self.name_var.get()))
 
-        vat_frame = ttk.LabelFrame(parent, text="Настройки НДС по умолчанию")
-        vat_frame.grid(row=1, column=0, columnspan=2, sticky='we', padx=10, pady=10)
+        ttk.Button(toolbar, text="Сохранить проект", command=self.save_project).pack(side='right', padx=5)
+        ttk.Button(toolbar, text="Добавить договор", command=self.add_contract).pack(side='right', padx=5)
+        ttk.Button(toolbar, text="Добавить из Excel", command=self.add_from_excel).pack(side='right', padx=5)
+        export_btn = ttk.Button(toolbar, text="Экспорт в Excel", command=self.export_simple_excel)
+        export_btn.pack(side='right', padx=8)
 
-        ttk.Label(vat_frame, text="Текущий НДС (%):").grid(row=0, column=0, sticky='w', padx=10, pady=5)
-        self.current_vat_var = tk.DoubleVar(value=self.project.settings.get('current_vat', 20.0))
-        ttk.Entry(vat_frame, textvariable=self.current_vat_var, width=10).grid(row=0, column=1, sticky='w', padx=10)
+        columns = ('name', 'number', 'total', 'remaining', 'year', 'vat_diff')
+        self.tree = ttk.Treeview(self, columns=columns, show='headings', height=25)
 
-        ttk.Label(vat_frame, text="Будущий НДС (%):").grid(row=1, column=0, sticky='w', padx=10, pady=5)
-        self.future_vat_var = tk.DoubleVar(value=self.project.settings.get('future_vat', 22.0))
-        ttk.Entry(vat_frame, textvariable=self.future_vat_var, width=10).grid(row=1, column=1, sticky='w', padx=10)
+        self.tree.heading('name', text='Название')
+        self.tree.heading('number', text='№')
+        self.tree.heading('total', text='Сумма')
+        self.tree.heading('remaining', text='Остаток 31.12.2025')
+        self.tree.heading('year', text='Год')
+        self.tree.heading('vat_diff', text='Доп. НДС')
 
-        info_frame = ttk.LabelFrame(parent, text="Информация")
-        info_frame.grid(row=2, column=0, columnspan=2, sticky='we', padx=10, pady=10)
+        self.tree.column('name', width=300)
+        self.tree.column('number', width=100, anchor='center')
+        self.tree.column('total', width=140, anchor='e')
+        self.tree.column('remaining', width=160, anchor='e')
+        self.tree.column('year', width=80, anchor='center')
+        self.tree.column('vat_diff', width=140, anchor='e')
 
-        self.info_text = tk.Text(info_frame, height=6, width=80)
-        self.info_text.pack(padx=10, pady=10)
-        self.info_text.config(state='disabled')
+        self.tree.pack(fill='both', expand=True, padx=10, pady=10)
+        self.tree.bind('<Double-1>', self.edit_selected)
 
-    def setup_contracts_tab(self, parent):
-        control_frame = ttk.Frame(parent)
-        control_frame.pack(fill='x', padx=10, pady=5)
-
-        # Кнопки для файловых контрактов
-        file_btns = ttk.Frame(control_frame)
-        file_btns.pack(side='left')
-        ttk.Button(file_btns, text="Добавить из файла", command=self.add_contract).pack(side='left', padx=2)
-        ttk.Button(file_btns, text="Удалить файл", command=self.remove_contract).pack(side='left', padx=2)
-
-        # Кнопки для ручных контрактов
-        manual_btns = ttk.Frame(control_frame)
-        manual_btns.pack(side='left', padx=20)
-        ttk.Button(manual_btns, text="Создать вручную", command=self.add_contract_manual).pack(side='left', padx=2)
-        ttk.Button(manual_btns, text="Редактировать", command=self.edit_contract_manual).pack(side='left', padx=2)
-        ttk.Button(manual_btns, text="Удалить", command=self.remove_contract_manual).pack(side='left', padx=2)
-
-        # Переключатель вида
-        view_frame = ttk.Frame(control_frame)
-        view_frame.pack(side='right')
-        ttk.Label(view_frame, text="Показать:").pack(side='left')
-        self.view_var = tk.StringVar(value="all")
-        ttk.Radiobutton(view_frame, text="Все", variable=self.view_var, value="all", command=self.refresh_contracts).pack(side='left', padx=5)
-        ttk.Radiobutton(view_frame, text="Файловые", variable=self.view_var, value="file", command=self.refresh_contracts).pack(side='left', padx=5)
-        ttk.Radiobutton(view_frame, text="Ручные", variable=self.view_var, value="manual", command=self.refresh_contracts).pack(side='left', padx=5)
-
-        # Таблица
-        tree_frame = ttk.Frame(parent)
-        tree_frame.pack(fill='both', expand=True, padx=10, pady=5)
-
-        vsb = ttk.Scrollbar(tree_frame, orient="vertical")
-        vsb.pack(side='right', fill='y')
-
-        self.contracts_tree = ttk.Treeview(tree_frame,
-                                          columns=('type', 'name', 'cost', 'tasks'),
-                                          show='headings',
-                                          yscrollcommand=vsb.set)
-        vsb.config(command=self.contracts_tree.yview)
-
-        self.contracts_tree.heading('type', text='Тип')
-        self.contracts_tree.heading('name', text='Название')
-        self.contracts_tree.heading('cost', text='Сумма с НДС')
-        self.contracts_tree.heading('tasks', text='Задач')
-
-        self.contracts_tree.column('type', width=80)
-        self.contracts_tree.column('name', width=300)
-        self.contracts_tree.column('cost', width=150, anchor='e')
-        self.contracts_tree.column('tasks', width=80, anchor='center')
-
-        self.contracts_tree.pack(fill='both', expand=True)
-        self.contracts_tree.bind('<Double-1>', self.on_double_click)
-
-    def setup_results_tab(self, parent):
-        ttk.Button(parent, text="Экспорт в Excel (скоро)", state='disabled').pack(pady=10)
-
-        tree_frame = ttk.Frame(parent)
-        tree_frame.pack(fill='both', expand=True, padx=10)
-
-        vsb = ttk.Scrollbar(tree_frame, orient="vertical")
-        vsb.pack(side='right', fill='y')
-
-        self.results_tree = ttk.Treeview(tree_frame,
-                                        columns=('name', 'difference'),
-                                        show='headings',
-                                        yscrollcommand=vsb.set)
-        vsb.config(command=self.results_tree.yview)
-
-        self.results_tree.heading('name', text='Контракт')
-        self.results_tree.heading('difference', text='Доп. стоимость из-за НДС')
-
-        self.results_tree.column('name', width=400)
-        self.results_tree.column('difference', width=200, anchor='e')
-
-        self.results_tree.pack(fill='both', expand=True)
-
-        self.result_label = ttk.Label(parent, text="Нажмите «Рассчитать»", font=('Arial', 10, 'italic'))
-        self.result_label.pack(pady=10)
-
-    def load_project_data(self):
-        self.name_var.set(self.project.name)
-        self.current_vat_var.set(self.project.settings.get('current_vat', 20.0))
-        self.future_vat_var.set(self.project.settings.get('future_vat', 22.0))
-
-        info = f"Создан: {self.project.created.strftime('%d.%m.%Y %H:%M')}\n"
-        info += f"Изменён: {self.project.modified.strftime('%d.%m.%Y %H:%M')}\n"
-        info += f"Файловых контрактов: {len(self.project.contracts)}\n"
-        info += f"Ручных контрактов: {len(self.project.manual_contracts)}\n"
-        info += f"Путь: {self.project.project_dir if not self.is_new else 'не сохранён'}"
-        self.info_text.config(state='normal')
-        self.info_text.delete(1.0, 'end')
-        self.info_text.insert('end', info)
-        self.info_text.config(state='disabled')
-
-        self.refresh_contracts()
+        self.total_label = ttk.Label(self, text="", font=('', 12, 'bold'), foreground='#d32f2f')
+        self.total_label.pack(pady=10)
 
     def refresh_contracts(self):
-        for item in self.contracts_tree.get_children():
-            self.contracts_tree.delete(item)
+        for i in self.tree.get_children():
+            self.tree.delete(i)
 
-        view = self.view_var.get()
-
-        if view in ("all", "file"):
-            for contract in self.project.contracts:
-                self.contracts_tree.insert('', 'end', values=(
-                    "Файловый",
-                    contract.name,
-                    f"{contract.total_cost_with_vat:,.2f}",
-                    len(contract.tasks)
-                ))
-
-        if view in ("all", "manual"):
-            for contract in self.project.manual_contracts:
-                self.contracts_tree.insert('', 'end', values=(
-                    "Ручной",
-                    contract.name,
-                    f"{contract.total_cost_with_vat:,.2f}",
-                    len(contract.tasks)
-                ))
-
-    def on_double_click(self, event):
-        selection = self.contracts_tree.selection()
-        if not selection:
-            return
-        item = self.contracts_tree.item(selection[0])
-        contract_type = item['values'][0]
-        name = item['values'][1]
-
-        if contract_type == "Ручной":
-            self.edit_contract_manual(name)
-        else:
-            messagebox.showinfo("Файловый контракт", "Редактирование файловых контрактов через Excel пока не реализовано")
+        total = 0.0
+        for c in self.project.contracts:
+            diff = c.get_vat_difference()
+            total += diff
+            self.tree.insert('', 'end', values=(
+                c.name,
+                c.number or "—",
+                f"{c.total_cost_with_vat:,.2f}",  
+                f"{c.remaining_cost:,.2f}",       
+                c.start_year,
+                f"{diff:,.2f}"                    
+            ))
+        self.total_label.config(text=f"ИТОГО дополнительный НДС: {total:,.2f} ₽")
 
     def add_contract(self):
-        if self.is_new:
-            messagebox.showwarning("Сначала сохраните проект", "Сохраните проект перед добавлением файлов")
-            return
-        # Заглушка — можно реализовать позже
-        messagebox.showinfo("Скоро", "Добавление из файла будет реализовано позже")
+        c = Contract()
+        self.edit_contract(c, is_new=True)
 
-    def add_contract_manual(self):
-        if self.is_new:
-            messagebox.showwarning("Сначала сохраните проект", "Сохраните проект перед созданием ручного контракта")
-            return
-
-        # Создаём пустой контракт
-        contract = Contract(
-            name="Новый ручной контракт",
-            total_cost_with_vat=0.0,
-            start_year=datetime.now().year,
-            current_vat_rate=self.project.settings['current_vat']
-        )
-        editor = ContractEditor(self, self.project, contract)
-        self.wait_window(editor)
-
-        if contract.name != "Новый ручной контракт" or contract.total_cost_with_vat > 0:
-            self.project.manual_contracts.append(contract)
-            self.project.modified = datetime.now()
-            self.project.save()
-            self.refresh_contracts()
-            messagebox.showinfo("Успех", f"Ручной контракт «{contract.name}» добавлен")
-
-    def edit_contract_manual(self, name=None):
-        if self.is_new:
-            return
-
-        if not name:
-            selection = self.contracts_tree.selection()
-            if not selection:
-                messagebox.showwarning("Выбор", "Выберите ручной контракт")
-                return
-            item = self.contracts_tree.item(selection[0])
-            if item['values'][0] != "Ручной":
-                return
-            name = item['values'][1]
-
-        contract = next((c for c in self.project.manual_contracts if c.name == name), None)
-        if not contract:
-            messagebox.showerror("Ошибка", "Контракт не найден")
-            return
-
-        editor = ContractEditor(self, self.project, contract)
-        self.wait_window(editor)
-
+    def edit_selected(self, event=None):
+        sel = self.tree.selection()
+        if not sel: return
+        idx = self.tree.index(sel[0])
+        self.edit_contract(self.project.contracts[idx], is_new=False)  # Явно указываем, что это не новый договор
         self.project.modified = datetime.now()
-        self.project.save()
         self.refresh_contracts()
 
-    def remove_contract_manual(self):
-        selection = self.contracts_tree.selection()
-        if not selection:
-            messagebox.showwarning("Выбор", "Выберите ручной контракт для удаления")
-            return
-        item = self.contracts_tree.item(selection[0])
-        if item['values'][0] != "Ручной":
-            messagebox.showwarning("Ошибка", "Выберите ручной контракт")
-            return
+    def edit_contract(self, contract: Contract, is_new=False):
+        win = tk.Toplevel(self)
+        win.title("Договор" + (" (новый)" if is_new else ""))
+        win.geometry("500x420")
+        win.transient(self)
+        win.grab_set()
 
-        name = item['values'][1]
-        if messagebox.askyesno("Удаление", f"Удалить ручной контракт «{name}»?"):
-            self.project.manual_contracts = [c for c in self.project.manual_contracts if c.name != name]
-            self.project.modified = datetime.now()
-            self.project.save()
+        set_icon(win)
+
+        def entry(label, var):
+            ttk.Label(win, text=label).pack(anchor='w', padx=20, pady=2)
+            e = ttk.Entry(win, textvariable=var, width=60)
+            e.pack(padx=20, pady=2)
+            return e
+
+        name_var = tk.StringVar(value=contract.name)
+        num_var = tk.StringVar(value=contract.number)
+        total_var = tk.DoubleVar(value=contract.total_cost_with_vat)
+        remain_var = tk.DoubleVar(value=contract.remaining_cost)
+        year_var = tk.IntVar(value=contract.start_year)
+
+        entry("Название:", name_var)
+        entry("№ договора:", num_var)
+        entry("Сумма договора:", total_var)
+        ttk.Label(win, text="Остаток на 31.12.2025:").pack(anchor='w', padx=20, pady=2)
+        ttk.Entry(win, textvariable=remain_var, width=60).pack(padx=20, pady=2)
+        ttk.Label(win, text="Год:").pack(anchor='w', padx=20, pady=2)
+        ttk.Spinbox(win, from_=2000, to=2100, textvariable=year_var).pack(padx=20)
+
+        def save():
+            contract.name = name_var.get() or "Договор"
+            contract.number = num_var.get()
+            contract.total_cost_with_vat = max(0, total_var.get())
+            contract.remaining_cost = max(0, remain_var.get())
+            contract.start_year = year_var.get()
+            
+            # Добавляем договор в проект только если он новый
+            if is_new and (contract.total_cost_with_vat or contract.remaining_cost):
+                self.project.contracts.append(contract)
+                self.project.modified = datetime.now()
+            
+            win.destroy()
             self.refresh_contracts()
 
-    def remove_contract(self):
-        # Для файловых — заглушка
-        messagebox.showinfo("Скоро", "Удаление файловых контрактов будет реализовано позже")
+        def cancel():
+            win.destroy()
+            # Если это новый договор и пользователь отменил создание, ничего не делаем
 
-    def calculate_results(self):
-        total = self.project.calculate_total_vat_difference()
+        ttk.Button(win, text="Сохранить", command=save).pack(pady=15)
+        
+        # Для новых договоров показываем кнопку "Отмена", для существующих - "Удалить"
+        if is_new:
+            ttk.Button(win, text="Отмена", command=cancel).pack(pady=5)
+        else:
+            ttk.Button(win, text="Удалить договор", style="Danger.TButton",
+                    command=lambda: [self.project.contracts.remove(contract), win.destroy(), self.refresh_contracts()]
+                    if messagebox.askyesno("Удалить", "Удалить этот договор?") else None).pack(pady=5)
 
-        for item in self.results_tree.get_children():
-            self.results_tree.delete(item)
-
-        all_contracts = self.project.contracts + self.project.manual_contracts
-        for contract in all_contracts:
-            diff = contract.get_vat_difference()
-            self.results_tree.insert('', 'end', values=(contract.name, f"{diff:,.2f}"))
-
-        self.results_tree.insert('', 'end', values=("ИТОГО", f"{total:,.2f}"), tags=('total',))
-        self.results_tree.tag_configure('total', background='#e0f0ff', font=('Arial', 10, 'bold'))
-
-        self.result_label.config(text=f"Общая дополнительная стоимость из-за повышения НДС: {total:,.2f} ₽")
+    def add_from_excel(self):
+        path = filedialog.askopenfilename(filetypes=[("Excel", "*.xlsx;*.xls")])
+        if not path: return
+        try:
+            data = read_input_excel(path)
+            added = 0
+            for row in data[1:]:
+                if len(row) < 5: continue
+                c = Contract(
+                    name=str(row[0]) if row[0] else "Договор",
+                    number=str(row[1]) if len(row) > 1 else "",
+                    total_cost_with_vat=float(row[3]) if row[3] else 0,
+                    remaining_cost=float(row[4]) if row[4] else 0,
+                    start_year=datetime.now().year
+                )
+                self.project.contracts.append(c)
+                added += 1
+            self.project.modified = datetime.now()
+            self.refresh_contracts()
+            messagebox.showinfo("Готово", f"Добавлено: {added} договоров")
+        except Exception as e:
+            messagebox.showerror("Ошибка", str(e))
 
     def save_project(self):
+        name = self.name_var.get().strip() or "Без имени"
+        self.project.name = name
+        self.project.save()
+        messagebox.showinfo("Сохранено", f"Проект «{name}» сохранён")
+        self.project_manager.projects = VATProject.list_projects()
+
+    def export_simple_excel(self):
+        """Экспорт проекта в Excel — одна строка на договор + итог"""
+        if not self.project.contracts:
+            messagebox.showwarning("Пустой проект", "В проекте нет договоров для экспорта")
+            return
+
         try:
-            new_name = self.name_var.get().strip() or "Без имени"
-            if new_name != self.project.name:
-                self.project.rename_project(new_name)
+            # Формируем данные
+            data = self.project.get_export_data()
+            
+            # Диалог сохранения
+            default_name = f"{self.project.name}.xlsx"
+            filename = filedialog.asksaveasfilename(
+                defaultextension=".xlsx",
+                filetypes=[("Excel files", "*.xlsx")],
+                initialfile=default_name,
+                title="Экспорт проекта в Excel"
+            )
+            if not filename:
+                return
 
-            self.project.settings['current_vat'] = self.current_vat_var.get()
-            self.project.settings['future_vat'] = self.future_vat_var.get()
+            from utils.excel_processor import write_output_excel_simple
+            success = write_output_excel_simple(data, filename)
+            
+            if success:
+                total_diff = sum(contract.get_vat_difference() for contract in self.project.contracts)
+                messagebox.showinfo(
+                    "Готово!",
+                    f"Проект успешно экспортирован!\n\n"
+                    f"Файл: {filename}\n"
+                    f"Итого доп. НДС: {total_diff:,.0f} ₽"
+                )
+            else:
+                messagebox.showerror("Ошибка экспорта", "Не удалось сохранить файл Excel")
 
-            self.project.save()
-            self.is_new = False
-            self.clear_unsaved_flag()
-            messagebox.showinfo("Успех", "Проект сохранён")
-            self.load_project_data()
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось сохранить: {e}")
-
-    def on_close(self):
-        if self.is_new:
-            if messagebox.askyesno("Новый проект", "Сохранить перед закрытием?"):
-                self.save_project()
-            self.destroy()
-        elif self.unsaved_changes:
-            if messagebox.askyesno("Несохранённые изменения", "Сохранить перед закрытием?"):
-                self.save_project()
-            self.destroy()
-        else:
-            self.destroy()
+            messagebox.showerror("Ошибка экспорта", f"Произошла ошибка: {str(e)}")

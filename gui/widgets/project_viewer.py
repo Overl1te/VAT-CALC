@@ -1,152 +1,99 @@
+# gui/widgets/project_viewer.py
 import tkinter as tk
-from tkinter import ttk, messagebox
-from datetime import datetime
+from tkinter import ttk, messagebox, filedialog
+from utils.excel_processor import write_output_excel_simple
+
 
 class ProjectViewer(tk.Toplevel):
     def __init__(self, parent, project):
         super().__init__(parent)
         self.project = project
-        self.title(f"Просмотр проекта: {project.name}")
-        self.geometry("900x600")
-        self.resizable(True, True)
-        
-        # Основная рамка
-        main_frame = ttk.Frame(self)
-        main_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
+        self.title(f"Проект: {project.name} — Экспорт")
+        self.geometry("1000x650")
+        self._create_widgets()
+        self._show_summary()
+
+    def _create_widgets(self):
         # Информация о проекте
-        info_frame = ttk.LabelFrame(main_frame, text="Информация о проекте")
-        info_frame.pack(fill='x', pady=(0, 10))
-        
-        info_text = (f"Название: {project.name}\n"
-                    f"Создан: {project.created.strftime('%d.%m.%Y %H:%M')}\n"
-                    f"Изменен: {project.modified.strftime('%d.%m.%Y %H:%M')}\n"
-                    f"Настройки: НДС {project.settings.get('current_vat', 20)}% → "
-                    f"{project.settings.get('future_vat', 22)}%, "
-                    f"лет прогноза: {project.settings.get('years', 5)}")
-        
-        ttk.Label(info_frame, text=info_text, justify='left').pack(anchor='w', padx=10, pady=10)
-        
-        # Данные проекта
-        data_frame = ttk.LabelFrame(main_frame, text="Результаты расчетов")
-        data_frame.pack(fill='both', expand=True)
-        
-        # Таблица с результатами
-        self.create_results_table(data_frame)
-        
-        # Кнопки
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill='x', pady=(10, 0))
-        
-        ttk.Button(button_frame, text="Экспорт в Excel", 
-                  command=self.export_to_excel).pack(side='left', padx=5)
-        ttk.Button(button_frame, text="Закрыть", 
-                  command=self.destroy).pack(side='right', padx=5)
-    
-    def create_results_table(self, parent):
-        """Создать таблицу с результатами"""
-        # Создаем фрейм с прокруткой
-        table_frame = ttk.Frame(parent)
-        table_frame.pack(fill='both', expand=True, padx=10, pady=10)
-        
+        info_frame = ttk.LabelFrame(self, text="Информация о проекте", padding=10)
+        info_frame.pack(fill="x", padx=10, pady=10)
+
+        info = f"""
+        Название проекта: {self.project.name}
+        Создан: {self.project.created.strftime('%d.%m.%Y %H:%M')}
+        Изменён: {self.project.modified.strftime('%d.%m.%Y %H:%M')}
+        Договоров в проекте: {len(self.project.contracts)}
+        """
+        ttk.Label(info_frame, text=info.strip(), justify="left", font=("Segoe UI", 10)).pack(anchor="w")
+
+        # Таблица договоров
+        table_frame = ttk.Frame(self)
+        table_frame.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        columns = ("name", "number", "total", "remain", "diff")
+        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=20)
+
+        self.tree.heading("name", text="Название договора")
+        self.tree.heading("number", text="№ договора")
+        self.tree.heading("total", text="Сумма с НДС 20%")
+        self.tree.heading("remain", text="Остаток на 31.12.2025")
+        self.tree.heading("diff", text="Доп. НДС 22%")
+
+        self.tree.column("name", width=300)
+        self.tree.column("number", width=100, anchor="center")
+        self.tree.column("total", width=150, anchor="e")
+        self.tree.column("remain", width=150, anchor="e")
+        self.tree.column("diff", width=150, anchor="e")
+
         # Скроллбары
-        v_scrollbar = ttk.Scrollbar(table_frame)
-        v_scrollbar.pack(side='right', fill='y')
-        
-        h_scrollbar = ttk.Scrollbar(table_frame, orient='horizontal')
-        h_scrollbar.pack(side='bottom', fill='x')
-        
-        # Таблица
-        self.tree = ttk.Treeview(table_frame, 
-                                columns=('name', 'base', 'year', 'vat', 'total'),
-                                show='headings',
-                                yscrollcommand=v_scrollbar.set,
-                                xscrollcommand=h_scrollbar.set)
-        
-        # Настройка колонок
-        columns_config = [
-            ('name', 'Название', 200),
-            ('base', 'Базовая стоимость', 120),
-            ('year', 'Год', 80),
-            ('vat', 'Ставка НДС', 100),
-            ('total', 'Стоимость с НДС', 120)
-        ]
-        
-        for col, title, width in columns_config:
-            self.tree.heading(col, text=title)
-            self.tree.column(col, width=width, anchor='center')
-        
-        self.tree.pack(fill='both', expand=True)
-        
-        # Настройка скроллбаров
-        v_scrollbar.config(command=self.tree.yview)
-        h_scrollbar.config(command=self.tree.xview)
-        
-        # Заполняем таблицу данными
-        self.populate_table()
-    
-    def populate_table(self):
-        """Заполнить таблицу данными проекта"""
-        if not self.project.results:
-            messagebox.showinfo("Нет данных", "В проекте нет результатов расчетов")
-            return
-        
-        # Очищаем таблицу
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        
-        # Заполняем данными
-        try:
-            if isinstance(self.project.results, list):
-                for result in self.project.results[:1000]:  # Ограничиваем для производительности
-                    if isinstance(result, dict):
-                        self.tree.insert('', 'end', values=(
-                            result.get('Название', ''),
-                            result.get('Базовая стоимость', 0),
-                            result.get('Год', 0),
-                            f"{result.get('Ставка НДС', 0)}%",
-                            result.get('Стоимость_с_НДС', 0)
-                        ))
-                    else:
-                        # Если это список
-                        self.tree.insert('', 'end', values=tuple(result))
-            
-            # Показываем статистику
-            self.show_stats()
-            
-        except Exception as e:
-            messagebox.showerror("Ошибка данных", f"Не удалось загрузить данные: {e}")
-    
-    def show_stats(self):
-        """Показать статистику по проекту"""
-        if self.project.results:
-            total_records = len(self.project.results)
-            stats_text = f"Всего записей: {total_records}"
-            
-            # Добавляем статистику в заголовок
-            current_title = self.title()
-            self.title(f"{current_title} - {stats_text}")
-    
+        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        self.tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        hsb.pack(side="bottom", fill="x")
+
+        # Кнопки
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+        ttk.Button(btn_frame, text="Экспорт в Excel", command=self.export_to_excel).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Закрыть", command=self.destroy).pack(side="right", padx=5)
+
     def export_to_excel(self):
-        """Экспорт проекта в Excel"""
-        try:
-            from utils.excel_processor import write_output_excel
-            from tkinter import filedialog
-            
-            if not self.project.results:
-                messagebox.showwarning("Нет данных", "Нет данных для экспорта")
-                return
-            
-            filename = filedialog.asksaveasfilename(
-                defaultextension='.xlsx',
-                filetypes=[('Excel files', '*.xlsx')],
-                title='Экспорт проекта в Excel',
-                initialfile=f"{self.project.name}.xlsx"
-            )
-            
-            if filename:
-                write_output_excel(self.project.results, filename)
-                messagebox.showinfo("Экспорт завершен", f"Проект экспортирован в {filename}")
-                
-        except Exception as e:
-            messagebox.showerror("Ошибка экспорта", f"Не удалось экспортировать: {e}")
+        default_name = f"{self.project.name.replace(' ', '_')}_доп_НДС_22.xlsx"
+        filename = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+            initialfile=default_name
+        )
+        if filename:
+            try:
+                data = self.project.get_export_data()
+                write_output_excel_simple(data, filename)
+                messagebox.showinfo("Успех", f"Экспорт завершён!\n{filename}")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Не удалось экспортировать:\n{e}")
+
+    def _show_summary(self):
+        total_diff = 0.0
+        for contract in self.project.contracts:
+            diff = contract.get_vat_difference()
+            total_diff += diff
+            self.tree.insert("", "end", values=(
+                contract.name,
+                contract.number or "—",
+                f"{contract.total_cost_with_vat:,.2f}",
+                f"{contract.remaining_cost:,.2f}",
+                f"{diff:,.2f}"
+            ))
+
+        # Итоговая строка
+        self.tree.insert("", "end", values=(
+            "ИТОГО", "", "", "", f"{total_diff:,.2f}"
+        ), tags=("total",))
+        self.tree.tag_configure("total", background="#fff8e1", font=("Segoe UI", 10, "bold"))
+
+        # Заголовок окна с итогом
+        self.title(f"Проект: {self.project.name} — Доп. НДС: {total_diff:,.0f} ₽")

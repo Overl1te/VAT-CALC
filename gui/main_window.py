@@ -5,15 +5,14 @@ from core.project_manager import ProjectManager
 from gui.widgets.settings_dialog import set_icon
 
 def run_app():
-    
+    """
+    Запускает основное приложение.
+    """
     root = tk.Tk()
     root.title('VAT Calculator - Управление проектами')
     root.geometry('1000x700')
 
-    # Менеджер проектов
     project_manager = ProjectManager()
-
-    # Основной интерфейс - управление проектами
     project_browser = ProjectBrowser(root, project_manager)
     project_browser.pack(fill='both', expand=True, padx=10, pady=10)
 
