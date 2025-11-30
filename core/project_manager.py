@@ -4,8 +4,9 @@ import zlib
 import shutil
 from datetime import datetime
 from pathlib import Path
-from core.config import get_projects_dir
+from core.config import get_projects_dir, get_current_vat, get_future_vat
 from core.contracts import Contract
+from utils.format import format_money
 
 
 class VATProject:
@@ -53,12 +54,14 @@ class VATProject:
         project.modified = data.get("modified", datetime.now())
         project.settings = data.get("settings", {})
 
-        for c in data.get("contracts", []):
+        for c_dict in data.get("contracts", []):
+            # Восстанавливаем ВСЕ поля, включая is_modified
             contract = Contract(
-                name=c.get("name", "Договор"),
-                number=c.get("number", ""),
-                total_cost_with_vat=c.get("total_cost_with_vat", 0.0),
-                remaining_cost=c.get("remaining_cost", 0.0),
+                is_modified=c_dict.get("is_modified", False),
+                name=c_dict.get("name", "Договор"),
+                number=c_dict.get("number", ""),
+                total_cost_with_vat=c_dict.get("total_cost_with_vat", 0.0),
+                remaining_cost=c_dict.get("remaining_cost", 0.0),
             )
             project.contracts.append(contract)
         return project
@@ -85,30 +88,34 @@ class VATProject:
             total_diff += diff
 
             data.append({
+                "Выполнено": "✓" if contract.is_modified else "-",
                 "Название договора": contract.name,
                 "№ договора": contract.number or "",
-                "Сумма договора": contract.total_cost_with_vat,
-                "Факт на 31.12.2025": contract.remaining_cost,
-                "Остаток": contract.get_difference(),
-                "Остаток без НДС": contract.get_without(),
-                "НДС текущий": contract.getVAT(),
-                "НДС будущий": contract.getVATfut(),
-                "Остаток с новым НДС": contract.getDiffWith(),
-                "Дополнительный НДС": diff,
+                "Сумма договора": format_money(contract.total_cost_with_vat),
+                "Факт на 31.12.2025": format_money(contract.remaining_cost),
+                "Остаток на 2026": format_money(contract.get_difference()),
+                "Остаток без НДС": format_money(contract.get_without()),
+                f"НДС - {int(get_current_vat())}%": format_money(contract.getVAT()),
+                f"НДС - {int(get_future_vat())}%": format_money(contract.getVATfut()),
+                "Остаток с будущим НДС": format_money(contract.getDiffWith()),
+                "Новая стоимость договора": format_money(contract.getNewCost()),
+                "Сумма увеличения по ДС": format_money(diff),
             })
 
         # Итоговая строка
         data.append({
-            "Название договора": "ИТОГО",
+            "Выполнено": 'ИТОГО',
+            "Название договора": "",
             "№ договора": "",
             "Сумма договора": "",
             "Факт на 31.12.2025": "",
-            "Остаток": "",
+            "Остаток на 2026": "",
             "Остаток без НДС": "",
-            "НДС текущий": "",
-            "НДС будущий": "",
-            "Остаток с новым НДС": "",
-            "Дополнительный НДС": total_diff,
+            f"НДС - {int(get_current_vat())}%": "",
+            f"НДС - {int(get_future_vat())}%": "",
+            "Остаток с будущим НДС": "",
+            "Новая стоимость договора": "",
+            "Сумма увеличения по ДС": format_money(total_diff),
         })
 
         return data

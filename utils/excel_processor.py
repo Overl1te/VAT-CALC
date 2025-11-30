@@ -1,6 +1,7 @@
 # utils/excel_processor.py
 from openpyxl import load_workbook, Workbook
 from openpyxl.utils import get_column_letter
+from core.config import get_current_vat, get_future_vat
 
 
 def read_input_excel(path):
@@ -22,16 +23,18 @@ def write_output_excel_simple(data, path):
 
     # Новые 10 колонок — как у тебя в таблице
     headers = [
+        "Выполнено",
         "Название договора",
         "№ договора",
         "Сумма договора",
         "Факт на 31.12.2025",
-        "Остаток",
+        "Остаток на 2026",
         "Остаток без НДС",
-        "НДС текущий",
-        "НДС будущий",
-        "Остаток с новым НДС",
-        "Дополнительный НДС"
+        f"НДС - {int(get_current_vat())}%",
+        f"НДС - {int(get_future_vat())}%",
+        "Остаток с будущим НДС",
+        "Новая стоимость договора",
+        "Сумма увеличения по ДС"
     ]
 
     ws.append(headers)
@@ -45,7 +48,7 @@ def write_output_excel_simple(data, path):
             if row_data.get("Название договора") == "ИТОГО":
                 if header == "Название договора":
                     row.append("ИТОГО")
-                elif header == "Дополнительный НДС":
+                elif header == "Сумма увеличения по ДС":
                     row.append(value)
                 else:
                     row.append("")
@@ -55,7 +58,7 @@ def write_output_excel_simple(data, path):
         ws.append(row)
 
     # Только одно улучшение — ширина колонок (это не стиль, это удобно)
-    column_widths = [40, 16, 20, 20, 20, 22, 20, 20, 23, 24]
+    column_widths = [10, 40, 16, 20, 20, 20, 22, 20, 20, 23, 23, 24]
     for i, width in enumerate(column_widths, 1):
         ws.column_dimensions[get_column_letter(i)].width = width
 

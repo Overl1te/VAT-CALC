@@ -1,6 +1,6 @@
 [Setup]
 AppName=VAT Calculator
-AppVersion=4.1.0
+AppVersion=4.2.0
 AppPublisher=Overl1te
 AppPublisherURL=https://github.com/Overl1te/VAT-CALC/
 DefaultDirName=C:\VAT-CALC

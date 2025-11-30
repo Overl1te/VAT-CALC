@@ -1,8 +1,9 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from core.config import get_current_vat, get_future_vat
 
 @dataclass
 class Contract:
+    is_modified: bool = field(default=False, metadata={"save": True})
     name: str = "Новый договор"
     number: str = ""                    # № договора
     total_cost_with_vat: float = 0.0    # Полная сумма договора
@@ -15,6 +16,9 @@ class Contract:
 
     def getVATfut(self) -> float:
         return self.get_without() * (self.future_vat_rate - 1)
+
+    def getNewCost(self) -> float:
+        return self.get_without() + self.getVATfut()
 
     def getDiffWith(self) -> float:
         return self.get_without() + self.getVATfut()
