@@ -23,5 +23,5 @@ class Contract:
         future_vat_rate = 1 + get_future_vat() / 100
         
         # Формула: remaining_cost * (1/current_vat_rate - 1/future_vat_rate)
-        difference = self.remaining_cost * (1/current_vat_rate - 1/future_vat_rate)
+        difference = self.remaining_cost * (future_vat_rate / current_vat_rate - 1)
         return round(difference, 2)
