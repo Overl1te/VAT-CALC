@@ -59,7 +59,6 @@ class VATProject:
                 number=c.get("number", ""),
                 total_cost_with_vat=c.get("total_cost_with_vat", 0.0),
                 remaining_cost=c.get("remaining_cost", 0.0),
-                start_year=c.get("start_year", datetime.now().year)
             )
             project.contracts.append(contract)
         return project
@@ -76,7 +75,7 @@ class VATProject:
 
     def get_export_data(self):
         """
-        Возвращает список словарей для экспорта в Excel (простой вид: 1 договор = 1 строка)
+        Возвращает список словарей для экспорта в Excel с расширенными расчётами
         """
         data = []
         total_diff = 0.0
@@ -88,18 +87,28 @@ class VATProject:
             data.append({
                 "Название договора": contract.name,
                 "№ договора": contract.number or "",
-                "Сумма договора": contract.total_cost_with_vat,  # ЧИСЛО
-                "Остаток на 31.12.2025": contract.remaining_cost,  # ЧИСЛО
-                "Дополнительный НДС": diff,  # ЧИСЛО
+                "Сумма договора": contract.total_cost_with_vat,
+                "Факт на 31.12.2025": contract.remaining_cost,
+                "Остаток": contract.get_difference(),
+                "Остаток без НДС": contract.get_without(),
+                "НДС текущий": contract.getVAT(),
+                "НДС будущий": contract.getVATfut(),
+                "Остаток с новым НДС": contract.getDiffWith(),
+                "Дополнительный НДС": diff,
             })
 
-        # Добавляем итоговую строку
+        # Итоговая строка
         data.append({
             "Название договора": "ИТОГО",
             "№ договора": "",
-            "Сумма договора": "",  # Пустая строка
-            "Остаток на 31.12.2025": "",  # Пустая строка
-            "Дополнительный НДС": total_diff,  # ЧИСЛО
+            "Сумма договора": "",
+            "Факт на 31.12.2025": "",
+            "Остаток": "",
+            "Остаток без НДС": "",
+            "НДС текущий": "",
+            "НДС будущий": "",
+            "Остаток с новым НДС": "",
+            "Дополнительный НДС": total_diff,
         })
 
         return data

@@ -13,7 +13,7 @@ class ProjectEditor(tk.Toplevel):
         self.project_manager = project_manager
         self.project = project or project_manager.create_project_in_memory("Новый проект")
         self.title(f"Проект: {self.project.name}" + (" (новый)" if project is None else ""))
-        self.geometry("1200x700")
+        self.geometry("1320x700")
         self.create_widgets()
         self.refresh_contracts()
 
@@ -34,22 +34,30 @@ class ProjectEditor(tk.Toplevel):
         export_btn = ttk.Button(toolbar, text="Экспорт в Excel", command=self.export_simple_excel)
         export_btn.pack(side='right', padx=8)
 
-        columns = ('name', 'number', 'total', 'remaining', 'year', 'vat_diff')
+        columns = ('name', 'number', 'total', 'remaining', 'diff', 'without', 'vat_now', 'vat_fut', 'diff_with', 'vat_diff')
         self.tree = ttk.Treeview(self, columns=columns, show='headings', height=25)
 
         self.tree.heading('name', text='Название')
         self.tree.heading('number', text='№')
         self.tree.heading('total', text='Сумма')
-        self.tree.heading('remaining', text='Остаток 31.12.2025')
-        self.tree.heading('year', text='Год')
-        self.tree.heading('vat_diff', text='Доп. НДС')
+        self.tree.heading('remaining', text='Факт 31.12.2025')
+        self.tree.heading('diff', text='Остаток')
+        self.tree.heading('without', text='Остаток без НДС')
+        self.tree.heading('vat_now', text='Текущий НДС')
+        self.tree.heading('vat_fut', text='Будущий НДС')
+        self.tree.heading('diff_with',text='Остаток с будущим НДС')
+        self.tree.heading('vat_diff', text='Разница')
 
-        self.tree.column('name', width=300)
-        self.tree.column('number', width=100, anchor='center')
-        self.tree.column('total', width=140, anchor='e')
-        self.tree.column('remaining', width=160, anchor='e')
-        self.tree.column('year', width=80, anchor='center')
-        self.tree.column('vat_diff', width=140, anchor='e')
+        self.tree.column('name', width=100)
+        self.tree.column('number', width=80, anchor='center')
+        self.tree.column('total', width=110, anchor='e')
+        self.tree.column('remaining', width=110, anchor='e')
+        self.tree.column('diff', width=110, anchor='e')
+        self.tree.column('without', width=110, anchor='e')
+        self.tree.column('vat_now', width=110, anchor='e')
+        self.tree.column('vat_fut', width=110, anchor='e')
+        self.tree.column('diff_with', width=120, anchor='e')
+        self.tree.column('vat_diff', width=100, anchor='e')
 
         self.tree.pack(fill='both', expand=True, padx=10, pady=10)
         self.tree.bind('<Double-1>', self.edit_selected)
@@ -63,15 +71,24 @@ class ProjectEditor(tk.Toplevel):
 
         total = 0.0
         for c in self.project.contracts:
-            diff = c.get_vat_difference()
-            total += diff
+            diff = c.get_difference()
+            vat_now = c.getVAT()
+            without = c.get_without()
+            vat_fut = c.getVATfut()
+            diff_with = c.getDiffWith()
+            vat_diff = c.get_vat_difference()
+            total += vat_diff
             self.tree.insert('', 'end', values=(
                 c.name,
                 c.number or "—",
-                f"{c.total_cost_with_vat:,.2f}",  
-                f"{c.remaining_cost:,.2f}",       
-                c.start_year,
-                f"{diff:,.2f}"                    
+                f"{c.total_cost_with_vat:,.2f}",
+                f"{c.remaining_cost:,.2f}",
+                f"{diff:,.2f}",
+                f"{without:,.2f}",
+                f"{vat_now:,.2f}",
+                f"{vat_fut:,.2f}",
+                f"{diff_with:,.2f}",
+                f"{vat_diff:,.2f}"
             ))
         self.total_label.config(text=f"ИТОГО дополнительный НДС: {total:,.2f} ₽")
 
@@ -84,7 +101,6 @@ class ProjectEditor(tk.Toplevel):
         if not sel: return
         idx = self.tree.index(sel[0])
         self.edit_contract(self.project.contracts[idx], is_new=False)  # Явно указываем, что это не новый договор
-        self.project.modified = datetime.now()
         self.refresh_contracts()
 
     def edit_contract(self, contract: Contract, is_new=False):
@@ -106,27 +122,22 @@ class ProjectEditor(tk.Toplevel):
         num_var = tk.StringVar(value=contract.number)
         total_var = tk.DoubleVar(value=contract.total_cost_with_vat)
         remain_var = tk.DoubleVar(value=contract.remaining_cost)
-        year_var = tk.IntVar(value=contract.start_year)
 
         entry("Название:", name_var)
         entry("№ договора:", num_var)
         entry("Сумма договора:", total_var)
-        ttk.Label(win, text="Остаток на 31.12.2025:").pack(anchor='w', padx=20, pady=2)
+        ttk.Label(win, text="Факт на 31.12.2025:").pack(anchor='w', padx=20, pady=2)
         ttk.Entry(win, textvariable=remain_var, width=60).pack(padx=20, pady=2)
-        ttk.Label(win, text="Год:").pack(anchor='w', padx=20, pady=2)
-        ttk.Spinbox(win, from_=2000, to=2100, textvariable=year_var).pack(padx=20)
 
         def save():
             contract.name = name_var.get() or "Договор"
             contract.number = num_var.get()
             contract.total_cost_with_vat = max(0, total_var.get())
             contract.remaining_cost = max(0, remain_var.get())
-            contract.start_year = year_var.get()
             
             # Добавляем договор в проект только если он новый
             if is_new and (contract.total_cost_with_vat or contract.remaining_cost):
                 self.project.contracts.append(contract)
-                self.project.modified = datetime.now()
             
             win.destroy()
             self.refresh_contracts()
@@ -154,11 +165,10 @@ class ProjectEditor(tk.Toplevel):
             for row in data[1:]:
                 if len(row) < 5: continue
                 c = Contract(
-                    name=str(row[0]) if row[0] else "Договор",
+                    name=str(row[0]) if row[0] else "Договор",  
                     number=str(row[1]) if len(row) > 1 else "",
                     total_cost_with_vat=float(row[3]) if row[3] else 0,
                     remaining_cost=float(row[4]) if row[4] else 0,
-                    start_year=datetime.now().year
                 )
                 self.project.contracts.append(c)
                 added += 1
